@@ -1,6 +1,10 @@
 name: Package Standalone Manylinux Archive
 
 on:
+  push:
+    branches:
+      - offline-packaging
+      - claude/manylinux-packaging-workflow-brNvh
   workflow_dispatch:
     inputs:
       python_version:
