@@ -13,7 +13,7 @@ on:
         default: "20250317"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   package:
@@ -44,39 +44,33 @@ jobs:
           tar -xzf /tmp/cpython.tar.gz -C /tmp/standalone
           /tmp/standalone/python/bin/python3 --version
 
-      - name: Create virtual environment and install dependencies
+      - name: Install dependencies into standalone Python
         run: |
           set -euo pipefail
+          PIP=/tmp/standalone/python/bin/pip3
           PYTHON=/tmp/standalone/python/bin/python3
 
-          # Create a venv inside the standalone tree so paths stay relative
-          ${PYTHON} -m venv /tmp/standalone/venv
-          VENV_PIP=/tmp/standalone/venv/bin/pip
-          VENV_PYTHON=/tmp/standalone/venv/bin/python
+          # Upgrade pip/setuptools/wheel in the standalone interpreter
+          ${PIP} install --upgrade pip setuptools wheel
 
-          # Upgrade pip/setuptools/wheel inside the venv
-          ${VENV_PIP} install --upgrade pip setuptools wheel
-
-          # Install the project and all its dependencies
-          ${VENV_PIP} install --no-cache-dir .
+          # Install the project and all runtime dependencies directly
+          # into the standalone Python's own site-packages
+          ${PIP} install --no-cache-dir .
 
           # Smoke-test: the entry-point must be importable
-          ${VENV_PYTHON} -c "from pr_agent.cli import run; print('import ok')"
+          ${PYTHON} -c "from pr_agent.cli import run; print('import ok')"
 
-      - name: Relocate tree and write launcher scripts
+      - name: Assemble package tree and write launcher scripts
         run: |
           set -euo pipefail
           PKG=/tmp/pr-agent-standalone
 
           mkdir -p "${PKG}"
 
-          # Copy portable python interpreter
+          # Copy the portable Python interpreter (includes all installed packages)
           cp -a /tmp/standalone/python "${PKG}/python"
 
-          # Copy the virtual environment
-          cp -a /tmp/standalone/venv "${PKG}/venv"
-
-          # Copy the project source for reference / settings
+          # Copy project source for settings / reference
           cp -a pr_agent "${PKG}/pr_agent"
           cp -a pyproject.toml requirements.txt "${PKG}/"
           [ -d docs ] && cp -a docs "${PKG}/docs" || true
@@ -90,11 +84,10 @@ jobs:
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-          export VIRTUAL_ENV="${ROOT}/venv"
-          export PATH="${ROOT}/venv/bin:${ROOT}/python/bin:${PATH}"
+          export PATH="${ROOT}/python/bin:${PATH}"
           export PYTHONDONTWRITEBYTECODE=1
 
-          exec python -m pr_agent.cli "$@"
+          exec "${ROOT}/python/bin/python3" -m pr_agent.cli "$@"
           LAUNCHER
           chmod +x "${PKG}/bin/pr-agent"
 
@@ -106,11 +99,10 @@ jobs:
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-          export VIRTUAL_ENV="${ROOT}/venv"
-          export PATH="${ROOT}/venv/bin:${ROOT}/python/bin:${PATH}"
+          export PATH="${ROOT}/python/bin:${PATH}"
           export PYTHONDONTWRITEBYTECODE=1
 
-          exec python -m gunicorn \
+          exec "${ROOT}/python/bin/python3" -m gunicorn \
             -k uvicorn.workers.UvicornWorker \
             -c pr_agent.servers.gunicorn_config \
             --forwarded-allow-ips '*' \
@@ -141,8 +133,7 @@ jobs:
           Directory layout
           ----------------
             bin/            Launcher scripts
-            python/         Portable CPython 3.12 interpreter
-            venv/           Pre-installed virtual environment with all dependencies
+            python/         Portable CPython 3.12 with all dependencies pre-installed
             pr_agent/       Application source code & settings
             pyproject.toml  Project metadata
             requirements.txt
@@ -162,10 +153,20 @@ jobs:
           tar -czf "/tmp/${ARCHIVE_NAME}" -C /tmp pr-agent-standalone
           ls -lh "/tmp/${ARCHIVE_NAME}"
           echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> "${GITHUB_ENV}"
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ env.ARCHIVE_NAME }}
-          path: /tmp/${{ env.ARCHIVE_NAME }}
-          retention-days: 30
+          tag_name: offline-${{ env.VERSION }}-${{ github.run_number }}
+          name: "Standalone manylinux package ${{ env.VERSION }} (build #${{ github.run_number }})"
+          body: |
+            Standalone air-gapped PR-Agent package for `manylinux_2_34` (glibc ≥ 2.34) x86_64.
+
+            ```
+            tar xzf ${{ env.ARCHIVE_NAME }}
+            cd pr-agent-standalone
+            ./bin/pr-agent --help
+            ```
+          files: /tmp/${{ env.ARCHIVE_NAME }}
+          make_latest: false
