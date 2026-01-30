@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - offline-packaging
+      - claude/offline-packaging-brNvh
       - claude/manylinux-packaging-workflow-brNvh
   workflow_dispatch:
     inputs:
